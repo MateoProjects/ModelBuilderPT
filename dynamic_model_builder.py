@@ -49,6 +49,7 @@ class DynamicModel(nn.Module):
             OperationType.CONCAT: LayerOperations.concat
         }
         
+
         
         self._create_layers()
         self.output_layers = self.config.get("output_layers", [self.config["layers"][-1]["id"]])
@@ -67,10 +68,7 @@ class DynamicModel(nn.Module):
 
             layer_params = layer_config.get("params", {})
             try:
-                if layer_type in self.custom_layers:
-                    layer = self.custom_layers[layer_type](layer_params)
-                else:
-                    layer = getattr(nn, layer_type)(**layer_params)
+                layer = getattr(nn, layer_type)(**layer_params)
                 self.layers[layer_id] = layer
             except Exception as e:
                 raise ValueError(f"Error creating layer {layer_id} of type {layer_type}: {str(e)}")

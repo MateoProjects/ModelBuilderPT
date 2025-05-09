@@ -413,62 +413,132 @@ def create_resunet_config():
 
 def create_densenet_config():
     """Create config for dynamic DenseNet"""
-    return {
-        "layers": [
-            {"id": "input_data", "type": "Input"},
-            
-            # Initial convolution
-            {"id": "initial", "type": "Conv2d",
-             "params": {"in_channels": 3, "out_channels": 64, "kernel_size": 7, "stride": 2, "padding": 3},
-             "inputs": ["input_data"]},
-            
-            # First Dense Block
-            {"id": "dense1_bn1", "type": "BatchNorm2d", "params": {"num_features": 64}, "inputs": ["initial"]},
-            {"id": "dense1_relu1", "type": "ReLU", "params": {}, "inputs": ["dense1_bn1"]},
-            {"id": "dense1_conv1", "type": "Conv2d",
-             "params": {"in_channels": 64, "out_channels": 32, "kernel_size": 3, "padding": 1},
-             "inputs": ["dense1_relu1"]},
-            
-            {"id": "dense1_concat1", "type": "Concat", "inputs": ["initial", "dense1_conv1"]},
-            {"id": "dense1_bn2", "type": "BatchNorm2d", "params": {"num_features": 96}, "inputs": ["dense1_concat1"]},
-            {"id": "dense1_relu2", "type": "ReLU", "params": {}, "inputs": ["dense1_bn2"]},
-            {"id": "dense1_conv2", "type": "Conv2d",
-             "params": {"in_channels": 96, "out_channels": 32, "kernel_size": 3, "padding": 1},
-             "inputs": ["dense1_relu2"]},
-            
-            {"id": "dense1_concat2", "type": "Concat", "inputs": ["dense1_concat1", "dense1_conv2"]},
-            
-            # Transition 1
-            {"id": "trans1_bn", "type": "BatchNorm2d", "params": {"num_features": 128}, "inputs": ["dense1_concat2"]},
-            {"id": "trans1_relu", "type": "ReLU", "params": {}, "inputs": ["trans1_bn"]},
-            {"id": "trans1_conv", "type": "Conv2d",
-             "params": {"in_channels": 128, "out_channels": 128, "kernel_size": 1},
-             "inputs": ["trans1_relu"]},
-            {"id": "trans1_pool", "type": "AvgPool2d", "params": {"kernel_size": 2}, "inputs": ["trans1_conv"]},
-            
-            # Second Dense Block
-            {"id": "dense2_bn1", "type": "BatchNorm2d", "params": {"num_features": 128}, "inputs": ["trans1_pool"]},
-            {"id": "dense2_relu1", "type": "ReLU", "params": {}, "inputs": ["dense2_bn1"]},
-            {"id": "dense2_conv1", "type": "Conv2d",
-             "params": {"in_channels": 128, "out_channels": 32, "kernel_size": 3, "padding": 1},
-             "inputs": ["dense2_relu1"]},
-            
-            {"id": "dense2_concat1", "type": "Concat", "inputs": ["trans1_pool", "dense2_conv1"]},
-            
-            # Transition 2 (Upsampling)
-            {"id": "trans2_bn", "type": "BatchNorm2d", "params": {"num_features": 160}, "inputs": ["dense2_concat1"]},
-            {"id": "trans2_relu", "type": "ReLU", "params": {}, "inputs": ["trans2_bn"]},
-            {"id": "trans2_conv", "type": "Conv2d",
-             "params": {"in_channels": 160, "out_channels": 64, "kernel_size": 1},
-             "inputs": ["trans2_relu"]},
-            {"id": "trans2_up", "type": "Upsample", "params": {"scale_factor": 2}, "inputs": ["trans2_conv"]},
-            
-            # Final convolution
-            {"id": "final", "type": "Conv2d",
-             "params": {"in_channels": 64, "out_channels": 3, "kernel_size": 1},
-             "inputs": ["trans2_up"]}
-        ]
-    }
+    growth_rate = 32
+    initial_channels = 64 
+
+    # Calculate channel numbers after each major stage
+    channels_after_dense1 = initial_channels + 4 * growth_rate  # 64 + 4*32 = 192
+    channels_after_trans1 = 128 
+    channels_after_dense2 = channels_after_trans1 + 4 * growth_rate # 128 + 4*32 = 256
+    channels_after_trans2 = 64
+
+    layers = [
+        {"id": "input_data", "type": "Input"},
+        {"id": "initial_conv", "type": "Conv2d",
+         "params": {"in_channels": 3, "out_channels": initial_channels, "kernel_size": 7, "stride": 2, "padding": 3},
+         "inputs": ["input_data"]},
+    ]
+
+    # --- Dense Block 1 ---
+    current_channels = initial_channels
+    accumulated_features = ["initial_conv"]
+
+    for i in range(1, 5):  # 4 layers in dense block
+        layer_prefix = f"dense1_l{i}"
+        
+        # Primer concatenem totes les característiques anteriors
+        concat_id = f"{layer_prefix}_concat"
+        if i > 1:
+            layers.append({
+                "id": concat_id,
+                "type": "Concat",
+                "inputs": accumulated_features.copy()  # Important fer una còpia
+            })
+        else:
+            concat_id = accumulated_features[0]
+        
+        # Després apliquem BN -> ReLU -> Conv
+        layers.extend([
+            {"id": f"{layer_prefix}_bn", "type": "BatchNorm2d", 
+             "params": {"num_features": current_channels}, 
+             "inputs": [concat_id]},
+            {"id": f"{layer_prefix}_relu", "type": "ReLU", 
+             "params": {}, 
+             "inputs": [f"{layer_prefix}_bn"]},
+            {"id": f"{layer_prefix}_conv", "type": "Conv2d",
+             "params": {"in_channels": current_channels, "out_channels": growth_rate, "kernel_size": 3, "padding": 1},
+             "inputs": [f"{layer_prefix}_relu"]}
+        ])
+        
+        accumulated_features.append(f"{layer_prefix}_conv")
+        current_channels += growth_rate
+
+    # Final concatenation for Dense Block 1
+    layers.append({
+        "id": "dense1_out",
+        "type": "Concat",
+        "inputs": accumulated_features
+    })
+
+    # --- Transition 1 ---
+    layers.extend([
+        {"id": "trans1_bn", "type": "BatchNorm2d", "params": {"num_features": channels_after_dense1}, "inputs": ["dense1_out"]},
+        {"id": "trans1_relu", "type": "ReLU", "params": {}, "inputs": ["trans1_bn"]},
+        {"id": "trans1_conv", "type": "Conv2d",
+         "params": {"in_channels": channels_after_dense1, "out_channels": channels_after_trans1, "kernel_size": 1},
+         "inputs": ["trans1_relu"]},
+        {"id": "trans1_pool", "type": "AvgPool2d", "params": {"kernel_size": 2}, "inputs": ["trans1_conv"]},
+    ])
+
+    # --- Dense Block 2 ---
+    current_channels = channels_after_trans1
+    accumulated_features = ["trans1_pool"]
+
+    for i in range(1, 5):  # 4 layers in dense block
+        layer_prefix = f"dense2_l{i}"
+        
+        # Primer concatenem totes les característiques anteriors
+        concat_id = f"{layer_prefix}_concat"
+        if i > 1:
+            layers.append({
+                "id": concat_id,
+                "type": "Concat",
+                "inputs": accumulated_features.copy()  # Important fer una còpia
+            })
+        else:
+            concat_id = accumulated_features[0]
+        
+        # Després apliquem BN -> ReLU -> Conv
+        layers.extend([
+            {"id": f"{layer_prefix}_bn", "type": "BatchNorm2d", 
+             "params": {"num_features": current_channels}, 
+             "inputs": [concat_id]},
+            {"id": f"{layer_prefix}_relu", "type": "ReLU", 
+             "params": {}, 
+             "inputs": [f"{layer_prefix}_bn"]},
+            {"id": f"{layer_prefix}_conv", "type": "Conv2d",
+             "params": {"in_channels": current_channels, "out_channels": growth_rate, "kernel_size": 3, "padding": 1},
+             "inputs": [f"{layer_prefix}_relu"]}
+        ])
+        
+        accumulated_features.append(f"{layer_prefix}_conv")
+        current_channels += growth_rate
+
+    # Final concatenation for Dense Block 2
+    layers.append({
+        "id": "dense2_out",
+        "type": "Concat",
+        "inputs": accumulated_features
+    })
+
+    # --- Transition 2 ---
+    layers.extend([
+        {"id": "trans2_bn", "type": "BatchNorm2d", "params": {"num_features": channels_after_dense2}, "inputs": ["dense2_out"]},
+        {"id": "trans2_relu", "type": "ReLU", "params": {}, "inputs": ["trans2_bn"]},
+        {"id": "trans2_conv", "type": "Conv2d",
+         "params": {"in_channels": channels_after_dense2, "out_channels": channels_after_trans2, "kernel_size": 1},
+         "inputs": ["trans2_relu"]},
+        {"id": "trans2_up", "type": "Upsample", "params": {"scale_factor": 2}, "inputs": ["trans2_conv"]},
+    ])
+    
+    # --- Final Convolution ---
+    layers.append(
+        {"id": "final_conv", "type": "Conv2d",
+         "params": {"in_channels": channels_after_trans2, "out_channels": 3, "kernel_size": 1},
+         "inputs": ["trans2_up"]}
+    )
+    
+    return {"layers": layers}
 
 def create_fpn_config():
     """Create config for dynamic FPN"""
