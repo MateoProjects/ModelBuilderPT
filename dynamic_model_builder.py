@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from typing import Dict, List, Any, Union
 import json
+from custom_layers import SelfAttention
 
 class OperationType:
     """Custom operations that are not direct PyTorch layers"""
@@ -21,6 +22,15 @@ class LayerOperations:
     def concat(inputs: List[torch.Tensor], dim: int = 1) -> torch.Tensor:
         """Concatenate multiple tensors along specified dimension"""
         return torch.cat(inputs, dim=dim)
+
+class CustomLayers:
+    """Custom layer implementations"""
+    
+    @staticmethod
+    def create_self_attention(params):
+        """Create a self-attention layer"""
+        channels = params["in_channels"]
+        return SelfAttention(channels)
 
 class DynamicModel(nn.Module):
     def __init__(self, config: Union[str, dict, List[dict]]):
@@ -48,6 +58,11 @@ class DynamicModel(nn.Module):
             OperationType.CONCAT: LayerOperations.concat
         }
         
+        # Register custom layers
+        self.custom_layers = {
+            "SelfAttention": CustomLayers.create_self_attention
+        }
+        
         self._create_layers()
         self.output_layers = self.config.get("output_layers", [self.config["layers"][-1]["id"]])
         
@@ -65,7 +80,10 @@ class DynamicModel(nn.Module):
 
             layer_params = layer_config.get("params", {})
             try:
-                layer = getattr(nn, layer_type)(**layer_params)
+                if layer_type in self.custom_layers:
+                    layer = self.custom_layers[layer_type](layer_params)
+                else:
+                    layer = getattr(nn, layer_type)(**layer_params)
                 self.layers[layer_id] = layer
             except Exception as e:
                 raise ValueError(f"Error creating layer {layer_id} of type {layer_type}: {str(e)}")
